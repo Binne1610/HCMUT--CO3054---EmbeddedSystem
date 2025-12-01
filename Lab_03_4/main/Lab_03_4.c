@@ -1,69 +1,63 @@
 #include <stdio.h>
+#include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "esp_freertos_hooks.h"
-#include "esp_system.h"
-#include "esp_timer.h"
+#include "esp_log.h"
 
-volatile uint64_t idle_count_core0 = 0;
-volatile uint64_t idle_count_core1 = 0;
+static const char *TAG = "CPU_MONITOR";
 
-const float tick_rate =  configTICK_RATE_HZ;
-
-// Idle hook cho core 0
-bool idle_hook_core0(void)
+void parse_cpu_usage(const char *stats)
 {
-    idle_count_core0++;
-    return true;
-}
+    float idle0 = -1, idle1 = -1;
+    char line[128];
+    const char *ptr = stats;
 
-// Idle hook cho core 1
-bool idle_hook_core1(void)
-{
-    idle_count_core1++;
-    return true;
-}
+    while (*ptr != 0) {
+        int len = 0;
+        while (ptr[len] != '\n' && ptr[len] != 0) len++;
+        memcpy(line, ptr, len);
+        line[len] = 0;
 
-// Task hiển thị CPU utilization
-void cpu_monitor_task(void *arg)
-{
-    uint64_t prev_idle0 = 0, prev_idle1 = 0;
+        if (strstr(line, "IDLE0")) {
+            sscanf(line, "%*s %*u %f", &idle0);
+        }
+        if (strstr(line, "IDLE1")) {
+            sscanf(line, "%*s %*u %f", &idle1);
+        }
 
-    while (1)
-    {
-        vTaskDelay(pdMS_TO_TICKS(1000));
-
-        uint64_t idle0 = idle_count_core0;
-        uint64_t idle1 = idle_count_core1;
-
-        uint64_t diff0 = idle0 - prev_idle0;
-        uint64_t diff1 = idle1 - prev_idle1;
-
-        prev_idle0 = idle0;
-        prev_idle1 = idle1;
-
-        float cpu0 = 100.0f * (1.0f - (float)diff0 / tick_rate);
-        float cpu1 = 100.0f * (1.0f - (float)diff1 / tick_rate);
-
-        if (cpu0 < 0) cpu0 = 0;
-        if (cpu1 < 0) cpu1 = 0;
-
-        printf("CPU Utilization: Core0 = %.2f%%, Core1 = %.2f%%\n",
-                cpu0, cpu1);
+        ptr += len;
+        if (*ptr == '\n') ptr++;
     }
+
+    if (idle0 >= 0)
+        ESP_LOGI(TAG, "Core0 Util: %.2f %%", 100.0 - idle0);
+    if (idle1 >= 0)
+        ESP_LOGI(TAG, "Core1 Util: %.2f %%", 100.0 - idle1);
 }
 
 void app_main(void)
 {
-    // Đăng ký Idle Hook
-    esp_register_freertos_idle_hook_for_cpu(idle_hook_core0, 0);
-    esp_register_freertos_idle_hook_for_cpu(idle_hook_core1, 1);
+    char *buf = malloc(4096);
 
-    xTaskCreatePinnedToCore(cpu_monitor_task,
-                            "cpu_monitor",
-                            4096,
-                            NULL,
-                            1,
-                            NULL,
-                            0);
+    if (!buf) {
+        ESP_LOGE(TAG, "Malloc failed!");
+        return;
+    }
+
+    while (1) {
+        memset(buf, 0, 4096);
+
+        // Lấy thống kê runtime
+        vTaskGetRunTimeStats(buf);
+
+        // In bảng stats
+        ESP_LOGI(TAG, "\n%s", buf);
+
+        // Parse ra CPU load từng core
+        parse_cpu_usage(buf);
+
+        vTaskDelay(pdMS_TO_TICKS(2000));
+    }
+
+    free(buf);
 }

@@ -39,7 +39,7 @@ void Task1(void *pvParameters)
     {
         if (gpio_get_level(BUTTON_GPIO) == 0)
         {
-            printf("ESP32\n");
+            printf(">>> ESP32\n");
         }
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
